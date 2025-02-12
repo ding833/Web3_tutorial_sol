@@ -13,13 +13,13 @@ contract FundMe {
     mapping (address => uint256) public funderToAmount;
 
     //预言机对象
-    AggregatorV3Interface internal dataFeed;
+    AggregatorV3Interface public dataFeed;
 
-    //设置单笔投资最小值：100美元
+    //设置单笔投资最小值：1美元
     uint256 constant MINIMUM_VALUE = 1*10**18; //USD
 
-    //设置筹集目标值, constant修饰的为常量，不能修改
-    uint256 constant TARGET = 1*10**18;
+    //设置筹集目标值1000美元, constant修饰的为常量，不能修改
+    uint256 constant TARGET = 1000*10**18;
 
     //合约拥有者
     address public owner;
@@ -35,10 +35,18 @@ contract FundMe {
     //记录拥有者是否已经提取资金池冲的eth，默认为false
     bool public getFundSuccess;
 
+    /**
+    * emit 关键字用于触发（或发射）事件。
+    * 事件是智能合约与外部世界（如前端应用或后端服务）通信的一种方式。
+    * 通过事件，你可以记录特定的操作或状态变化，并且这些事件可以在区块链上被监听和处理。
+    */
+    //打印日志
+    event FundWithdrawByOwner(uint256);
+
     //构造函数，只有部署的时候才会执行一次
-    constructor(uint256 _lockTime){
+    constructor(uint256 _lockTime, address dataFeedAddr){
         // sepolia testnet 测试网
-        dataFeed = AggregatorV3Interface(0x694AA1769357215DE4FAC081bf1f309aDC325306);
+        dataFeed = AggregatorV3Interface(dataFeedAddr);
         //初始化owner,把部署人设置为owner，此后不再改变
         owner = msg.sender;
 
@@ -106,12 +114,16 @@ contract FundMe {
 
         // call:
         bool success;
-        (success, ) = payable (msg.sender).call{value: address(this).balance}("");
+        uint256 banlance = address(this).balance;
+        (success, ) = payable (msg.sender).call{value: banlance}("");
         require(success, "transfer is failed");
     
-
         //已提取
         getFundSuccess = true;
+
+        //emit event  触发记录, 在单元测试中，可以查看event
+        emit FundWithdrawByOwner(banlance);
+
     }
 
     /**

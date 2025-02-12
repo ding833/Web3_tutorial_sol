@@ -1,0 +1,39 @@
+{
+  "language": "Solidity",
+  "sources": {
+    "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol": {
+      "content": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\n\n// solhint-disable-next-line interface-starts-with-i\ninterface AggregatorV3Interface {\n  function decimals() external view returns (uint8);\n\n  function description() external view returns (string memory);\n\n  function version() external view returns (uint256);\n\n  function getRoundData(\n    uint80 _roundId\n  ) external view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound);\n\n  function latestRoundData()\n    external\n    view\n    returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound);\n}\n"
+    },
+    "contracts/FundMe.sol": {
+      "content": "//SPDX-License-Identifier:MIT\r\npragma solidity ^0.8.28;\r\nimport {AggregatorV3Interface} from \"@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol\";\r\n\r\n// 1. 创建一个收款函数\r\n// 2. 记录投资人并且查看\r\n// 3. 在锁定期内，达到目标值，生产商可以提款\r\n// 4. 在锁定期内，没有达到目标值，投资人在锁定期以后退款\r\n\r\ncontract FundMe {\r\n\r\n    // 建立一个映射，记录投资人(发送人)的地址和投资金额（address是一种数据类型）\r\n    mapping (address => uint256) public funderToAmount;\r\n\r\n    //预言机对象\r\n    AggregatorV3Interface public dataFeed;\r\n\r\n    //设置单笔投资最小值：100美元\r\n    uint256 constant MINIMUM_VALUE = 1*10**18; //USD\r\n\r\n    //设置筹集目标值, constant修饰的为常量，不能修改\r\n    uint256 constant TARGET = 1*10**18;\r\n\r\n    //合约拥有者\r\n    address public owner;\r\n\r\n    //锁定期\r\n    uint256 deploymentTimestamp;\r\n    //锁定多久\r\n    uint256 lockTime;\r\n\r\n    //记录erc20合约的地址，用于校验：只有erc20合约才可以调用更改映射中eth的数量\r\n    address public erc20Addr;\r\n\r\n    //记录拥有者是否已经提取资金池冲的eth，默认为false\r\n    bool public getFundSuccess;\r\n\r\n    //构造函数，只有部署的时候才会执行一次\r\n    constructor(uint256 _lockTime, address dataFeedAddr){\r\n        // sepolia testnet 测试网\r\n        dataFeed = AggregatorV3Interface(dataFeedAddr);\r\n        //初始化owner,把部署人设置为owner，此后不再改变\r\n        owner = msg.sender;\r\n\r\n        //初始化时,从（部署合约所在区块）中获取锁定期\r\n        deploymentTimestamp = block.timestamp;\r\n        //用户设置锁定时间\r\n        lockTime = _lockTime;\r\n    }\r\n\r\n    /**\r\n    * 筹款，并记录合约地址，金额\r\n    */\r\n    function fund() external payable {\r\n        require(convertEthToUsd(msg.value) >= MINIMUM_VALUE, \"Send more ETH\");\r\n        //从（调用函数所在区块）中获取当前时间 < 锁定期开始时间+锁定时长\r\n        require(block.timestamp < deploymentTimestamp + lockTime, \"window is closed\");\r\n        // 映射中，msg的发送地址映射msg的值\r\n        funderToAmount[msg.sender] += msg.value;\r\n    }\r\n\r\n     /**\r\n     * 获取usd与ETH的价格比例\r\n     */\r\n    function getChainlinkDataFeedLatestAnswer() public view returns (int) {\r\n        // prettier-ignore\r\n        (\r\n            /* uint80 roundID */,\r\n            int answer,\r\n            /*uint startedAt*/,\r\n            /*uint timeStamp*/,\r\n            /*uint80 answeredInRound*/\r\n        ) = dataFeed.latestRoundData();\r\n        return answer;\r\n    }\r\n\r\n    /**\r\n    * 计算获取发送eth的总价值\r\n    */\r\n    function convertEthToUsd(uint256 ethAmount) internal view returns(uint256){\r\n        uint256 ethPrice = uint256(getChainlinkDataFeedLatestAnswer());\r\n        // 语言及这里获取的是：1ETH = USD*10^8 \r\n        return ethAmount * ethPrice/(10 ** 8);\r\n    }\r\n\r\n    /**\r\n    * 更改owner\r\n    */\r\n    function transferOwnership(address newOwner) public onlyOwner{\r\n        \r\n        owner = newOwner;\r\n    }\r\n\r\n    /**\r\n    * owner验证是否达到Target，owner提款\r\n    */\r\n    function getFund() external windowClosed onlyOwner{\r\n        require(convertEthToUsd(address(this).balance) >= TARGET, \"Target is not reached\");\r\n\r\n        // // transfer: addr.transfer(valible) 把ETH从此合约地址转移到owner地址\r\n        // payable(msg.sender).transfer(address(this).balance);\r\n\r\n        // // send\r\n        // bool success = payable(msg.sender).send(address(this).balance);\r\n        // require(success, \"tx failed\");\r\n\r\n        // call:\r\n        bool success;\r\n        (success, ) = payable (msg.sender).call{value: address(this).balance}(\"\");\r\n        require(success, \"transfer is failed\");\r\n    \r\n\r\n        //已提取\r\n        getFundSuccess = true;\r\n    }\r\n\r\n    /**\r\n    * 目标值没达到要求，需要退款\r\n    */\r\n    function refund() external windowClosed{\r\n        //查看筹集资金是否达到了目标值\r\n        require(convertEthToUsd(address(this).balance) < TARGET, \"Target is reached\");\r\n        //查询当前用户存入的eth是多少\r\n        require(funderToAmount[msg.sender] !=0 , \"there is no fund\");\r\n        bool success;\r\n        (success, ) = payable (msg.sender).call{value: funderToAmount[msg.sender]}(\"\");\r\n        require(success, \"transfer is failed\");\r\n        //完成退款后，要把映射中的存款清零\r\n        funderToAmount[msg.sender] = 0;\r\n    }\r\n\r\n    /**\r\n    * 用来更新映射通证的数量（只有erc20的合约才可以调用此函数）\r\n    */\r\n    function setFunderToAmount(address funder, uint256 amountToUpdate) external {\r\n        //限制调用的合约，只能是erc20合约\r\n        require(msg.sender == erc20Addr, \"you do not have permission to call this function\");\r\n        funderToAmount[funder] = amountToUpdate;\r\n    }\r\n\r\n    /**\r\n    * 设定erc20合约的地址\r\n    */\r\n    function setErc20Addr(address _erc20Addr) public onlyOwner{\r\n        erc20Addr = _erc20Addr;\r\n    }  \r\n\r\n    modifier windowClosed() {\r\n        require(block.timestamp >= deploymentTimestamp + lockTime, \"window is not closed\");\r\n        _;\r\n    }\r\n\r\n    modifier onlyOwner() {\r\n        require(msg.sender == owner, \"this function can only be called owner\");\r\n        _;\r\n    }\r\n}"
+    }
+  },
+  "settings": {
+    "evmVersion": "paris",
+    "optimizer": {
+      "enabled": false,
+      "runs": 200
+    },
+    "outputSelection": {
+      "*": {
+        "*": [
+          "abi",
+          "evm.bytecode",
+          "evm.deployedBytecode",
+          "evm.methodIdentifiers",
+          "metadata",
+          "devdoc",
+          "userdoc",
+          "storageLayout",
+          "evm.gasEstimates"
+        ],
+        "": [
+          "ast"
+        ]
+      }
+    },
+    "metadata": {
+      "useLiteralContent": true
+    }
+  }
+}
